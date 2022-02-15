@@ -1,0 +1,93 @@
+---
+title: "fMRI Pipeline"
+author: "Haroon Popal"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: 
+      collapsed: false
+    df_print: paged
+    css: !expr here::here("./misc/style_bootcamp.css")
+knit: (function(inputFile, encoding) { 
+      out_dir <- './';
+      rmarkdown::render(inputFile,
+                        encoding=encoding, 
+                        output_file=file.path(dirname(inputFile), out_dir, 'index.html')) })
+---
+
+
+# Computing Overview
+
+![](computing.png)
+
+
+# Steps
+
+
+
+## 1. Setting up BIDS
+The Brain Imaging Data Structure is a standardized way to organize your data. It is standardized because there is a growing community of researchers who are adopting this structure. In my opinion, it makes intuitive sense and makes a lot of decisions that I would otherwise have to make, and likely change (on purpose or by accident) over the course of my career. Instead, every time I look at my data, I know where everything is. As you will see throughout this tutorial, there are a lot of tools that have been developed based on BIDS, which allow for some very easy and reproducible tasks to be completed. 
+
+### 1.1 Making a BIDS directory
+The first step is to create a directory which we will reference as the "BIDS directory" from here on out. This is the parent directory where ALL of the data for your project will live. On the Olson lab linux machine, this directory goes under /data/projects.
+
+```{eval=FALSE}
+mkdir /data/projects/relationship_knowledge
+
+cd /data/projects/relationship_knowledge
+```
+
+Next we will make some subdirectories, in BIDS format. All of these subdirectories go in the BIDS directory you created above.
+
+### 1.2 Raw dicoms
+Raw dicoms go in the "sourcedata" subdirectory. 
+
+```{eval=FALSE}
+mkdir sourcedata
+```
+
+### 1.2 Scripts
+Scripts go in the "code" subdirectory.
+
+```{eval=FALSE}
+mkdir code
+```
+
+### 1.3 Derivatives
+All of the preprocessed data, analyses, and anything else that derives from your raw data goes in the "derivatives" subdirectory.
+
+```{eval=FALSE}
+mkdir derivatives
+```
+
+### Miscellaneous
+I like to also make an "archive" subdirectory where I put things that don't really belong anywhere else. 
+
+```{eval=FALSE}
+mkdir archive
+```
+
+When I do this, I include the archive subdirectory in a ".bidsignore" hidden file. This is a text file that includes paths to files that you want the BIDS checker to ignore. The files listed here would otherwise give you BIDS errors.
+
+```{eval=FALSE}
+echo "./archive" >> .bidsignore
+```
+
+
+## 2. Getting the data
+TUBRIC researchers can access their data from XNAT once it is sent there from the scanner. From XNAT, one can download entire scan session for a subject, or individual scans. In this pipeline, we will be downloading the entire scan session. Once a subject's data is downloaded to a local computer, transfer it to the linux machine using rsync or scp.
+
+```{eval=FALSE}
+rsync test cla27562:/data/projects/relationship_knowledge/sourcedata/
+```
+
+
+## 3. Setting up archives
+
+
+## 4. Preprocessing
+
+
+## 5. Analyses
