@@ -1,5 +1,5 @@
 ---
-title: "fMRI Pipeline"
+title: "fMRI Preprocessing with fmriprep"
 author: "Haroon Popal"
 date: "`r format(Sys.time(), '%B %d, %Y')`"
 output: 
@@ -247,7 +247,7 @@ Provide a freesurfer license. Freesurfer is not required to be run with fmriprep
 
 
 ### Running fmriprep on an HPC using singularity
-If you want to preprocess your data on an HPC like Temple's Owlsnest, you will have to use singularity. Docker inherently uses admin access to do things. If you see the output of HeuDiConv of fmriprep using "ll" or "ls -l", you'll see that the creater of those files is "root", not you. HPCs do not like this. As discussed above, HPCs are a shared resource so everyone has to play by the rules. Users generally don't have admin access, otherwise chaos might ensue. So instead of docker, we can use singularity to run fmriprep. 
+If you want to preprocess your data on an HPC like Temple's Owlsnest, you will have to use singularity. Docker inherently uses admin access to do things. If you see the output of HeuDiConv of fmriprep using "ll" or "ls -l", you'll see that the creator of those files is "root", not you. HPCs do not like this. As discussed above, HPCs are a shared resource so everyone has to play by the rules. Users generally don't have admin access, otherwise chaos might ensue. So instead of docker, we can use singularity to run fmriprep. 
 
 #### Creating a singularity image
 First, you will have to get a singularity image. This can be done with singularity, if you have it installed on your linux machine with the following command:
@@ -268,7 +268,14 @@ docker run --privileged -t --rm \
 
 **Note:** These singularity images are very large (over 1 GB).
 
-This singularity image will need to be transferred to Owlsnest.
+I usually keep this singularity image in the archive folder of my BIDS directory (don't for get to include the archive folder in the .bidsignore file so that you don't get any BIDS errors).
+
+#### Transfer BIDS directory to Owlsnest
+Next you can transfer your entire BIDS directory to Owlsnest. If your singularity image is not in your BIDS directory (i.e. you keep it in a more general place to be used across projects or users), make sure to copy that over too. 
+
+```{eval=FALSE}
+rsync -a /data/projects/relationship_knowledge owlsnest.hpc.temple.edu:~/work/
+```
 
 #### Downloading the templateflow directory
 Another feature that might be common with HPCs is that they do not allow internet access within nodes. fmriprep likes to connect to the internet to temporarily download standard templates like the MNI brain for preprocessing steps. Owlsnest does not allow this. So instead, we will have to pre-download those templates, called the "templateflow" directory. This can be done with the following command on a local machine, utilizing python:
@@ -338,6 +345,175 @@ module load singularity
 ```
 One advantage of using containers like singularity is that the container image has all the programs and scripts that are needed to complete your task. So instead of having to specify FSL, AFNI, python, and a bunch of other stuff here that Owlsnest might not support, we can just load the singularity module and run fmriprep with a singularity image. 
 
+```{eval=FALSE}
+# Define templateflow directory for within the singularity container
+export SINGULARITYENV_TEMPLATEFLOW_HOME=/home/fmriprep/.cache/templateflow
+```
+Here, we are defining a variable that will tell singularity where the "mount point" of the templateflow directory will be within the container. 
+
+```{eval=FALSE}
+singularity run -B ~/work/relationship_knowledge/archive/templateflow:/home/fmriprep/.cache/templateflow \
+        --cleanenv archive/fmriprep-20.1.1.simg  \
+        /home/tuk12127/work/relationship_knowledge /home/tuk12127/work/relationship_knowledge/derivatives \
+        participant \
+        --participant-label ${subj} \
+        --fs-license-file ~/work/license.txt \
+        --notrack \
+        --skip_bids_validation
+```
+Finally, we have the singlarity command. Some of this should look very familiar to how fmriprep runs with docker. If you want to specify any fmriprep options of flags, this is the place to do it. So see that [documentation](https://fmriprep.org/en/stable/). Note that after the "-B" flag, we are telling singularity where the templateflow exists on Owlsnest and then mapping that to where it will be within the container. This section path should match the path of the SINGULARITYENV_TEMPLATEFLOW_HOME variable. Another thing to note, is that we also had to transfer over our freesurfer license to the linux, and note that path for singularity. 
+
+For the "--participant-label" flag we input a variable "${subj}". The way that this script is set up, it will run one fmriprep for one subject. The way this can be done is by submitting this entire script as a job, and feeding it a subject ID:
+```{eval=FALSE}
+qsub code/fmriprep_hpc.sh -v subj=999
+```
+
+Running a single subject at a time would be appropriate in this way, if it is occasional (e.g. running one subject a week as you collect the data). If you have a lot of subjects to preprocess, they should be done as a batch so that you can utilize computing resources efficiently. 
 
 
-## 5. Analyses
+### Running multiple subjects with fmriprep on an HPC using singularity
+First, you will have to do some math. This math is to determine you many subjects you can run at a single time, while accounting for limits in computing resources. Earlier, we went through an example where each subject was run on a single node and we were wasting over half the resources we requested. Here, we will try to utilize all the of the resources we need to request.
+
+#### Time limits
+Let's say you have 40 subjects to preprocess. fmriprep takes about 12 hours to run. The maximum time a job is allowed to run on owlsnest in the [normal queue](https://www.hpc.temple.edu/owlsnest2/batch_system/queues/) is 48 hours. That means that you can run 4 subjects, back to back, and finish them in 48 hours. To finish all of our subjects within 48 hours, we will have to run 10 subjects at a time. 
+
+#### Computing resource limits
+In the normal queue, users can reserve 12 nodes per job, with 28 CPUs per node, and can run a maximum of 50 jobs at a time. This is more than enough to complete our preprocessing of 40 subjects within 28 hours.
+
+#### Per subject CPUs
+The final step is to decide how many CPUs we want to dedicate to preprocessing each subject. fmriprep has some great [information](https://fmriprep.org/en/stable/faq.html#how-much-cpu-time-and-ram-should-i-allocate-for-a-typical-fmriprep-run) on this, summarized in the figure below:
+![](images/fmriprep_benchmark.svg)
+In the left plot, we can get an idea of how quickly our subjects will finish preprocessing for a given number of CPUs per subject. Note here that this time only accounts for fmriprep running without freesurfer (adding in freesurfer, which is the default with fmriprep, takes 12ish hours). For me, the blue line is typically how I know to run things. This shows that after 8 CPUs, there is not much of a benefit in completion time when dedicating more CPUs. So I run fmriprep, with 8 CPUs per subject (with the "--omp-nthreads 8" argument).
+
+#### The math!
+Now we can put all the math together. If we dedicate 8 CPUs per subject, each subject will take about 12 hours to finish (this is from some early benchmarking I did. Numbers might be different now). Since we have 28 CPUs per node, we can run three subjects together, if we run them in a simple job with one node (8 nodes per subject x 3 subjects = 24/28 CPUs being used). That job will take 12 hours since all three subjects can run at once. To use the full time limit for a single job (48 hours), we can specify 12 subjects for that job, so that three can run at a time for 12 hours, and all 12 subjects will finish in 48 hours. Finally, we can submit 4 of these types of jobs, specifying up to 12 subjects per job, and complete preprocessing all of our 40 subjects in 48 hours. But how do we do this?
+
+**Note:** it is good to have an understanding of this math. These numbers are kind of theoretical. In my actual testing, We can run more subjects at a time and complete this type of preprocessing even sooner. Below is some actual code I used to run 40 subjects in batches of 6 subjects per job, to finish all the preprocessing in 48 hours.
+
+#### Torque-launch
+Owlsnest has a tool called [torque-launch](https://www.hpc.temple.edu/owlsnest2/workflows/batch_processing/) which allows uses to split up individual tasks within a job to run together. If you have more tasks than available processes for a given job, torque-launch will queue those additional tasks and run them once other tasks finish. So in this example, we can make an fmriprep command for a single subject as one task. Then run 6 tasks per job. We can then run seven of these types of jobs that each utilize torque-launch to complete the preprocessing, using the math we just discussed.
+
+The batch script can be used for this (fmriprep_hpc_batch.sh).
+
+```{eval=FALSE}
+#!/bin/sh
+#PBS -l walltime=48:00:00
+#PBS -N Relation-fmriprep
+#PBS -q normal
+#PBS -l nodes=1:ppn=28
+#PBS -m bae
+#PBS -M tuk12127@temple.edu
+
+
+# This script tries to run subjects optimally on the Owlsnest HPC
+# It uses torque launch to run multiple subjects at the same time on a single node.
+# You can run this script using qsub. But if you want to optimally use the computing resources
+# (this will make the HPC people happy), you should run subjects in batches of six.
+# Use the following command to run this script for batches of 6 subjects at a time 
+# (i.e. this will create multiple jobs with 6 subjects per job).
+
+# Define subject list
+# subjects_list=(301 651 653 693 695 697 699 700 701 706 715 716 719 720 721 722 723 724 726 727 730 738 739 740 743 745 747 749 751 753 754 759 761 762 763 764 765 766 767)
+
+# Run in batches of 6 subjects
+#for ((i=0; i < ${#subjects_list[@]}; i+=6)); do
+#	part=( "${subjects_list[@]:i:6}" )
+#	qsub code/fmriprep_hpc_batch.sh -v subjects="${part[*]}"
+#done
+
+
+
+
+# Import relevant modules
+module load singularity
+
+cd $PBS_O_WORKDIR
+
+# Set up for fmriprep
+# This directory needs to be mapped since nodes do not have internet connection on Owlsnest
+export SINGULARITYENV_TEMPLATEFLOW_HOME=/home/fmriprep/.cache/templateflow
+
+
+# Set up fmriprep torque-launch
+# Save command files in a subdirectory within your BIDS directory
+rm -f archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+touch archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+
+for subj in ${subjects}; do
+    echo singularity run --cleanenv \
+            # If running a more recent version of fmriprep, you might have to change the 
+            # container directory to /opt/templateflow
+            -B ~/work/relationship_knowledge/archive/templateflow:/home/fmriprep/.cache/templateflow \
+            ~/fmriprep-20.1.1.simg \
+            /home/tuk12127/work/relationship_knowledge /home/tuk12127/work/relationship_knowledge/derivatives \
+            participant \
+            --participant-label ${subj} \
+            --output-spaces MNI152NLin2009cAsym T1w \
+            --fs-license-file ~/work/license.txt \
+            --notrack \
+            --omp-nthreads 8 \
+            --skip_bids_validation >> archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+done
+
+# Run fmriprep
+torque-launch -p archive/job_scripts/chk_fmriprep_${PBS_JOBID}.txt archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+```
+
+A lot of this should look familar. There are also some notes that we'll go over as well. 
+
+
+```{eval=FALSE}
+#PBS -l walltime=24:00:00
+#PBS -N Relation-fmriprep
+#PBS -q normal
+#PBS -l nodes=1:ppn=28
+```
+Here is where the math comes in. We want each job to be 24 hours, and we want to specify one node with all 28 preprocessors.
+
+
+```{eval=FALSE}
+# Set up fmriprep torque-launch
+# Save command files in a subdirectory within your BIDS directory
+rm -f archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+touch archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+```
+To run torque-launch, you need to export tasks to .txt files which torque-launch will then read and run. Each text file will have a single fmriprep command. Here we are removing text files for the current job, just in case they exist. Then we are creating blank txt files for commands to be written into.
+
+
+```{eval=FALSE}
+for subj in ${subjects}; do
+    echo singularity run --cleanenv \
+            # If running a more recent version of fmriprep, you might have to change the 
+            # container directory to /opt/templateflow
+            -B ~/work/relationship_knowledge/archive/templateflow:/home/fmriprep/.cache/templateflow \
+            ~/fmriprep-20.1.1.simg \
+            /home/tuk12127/work/relationship_knowledge /home/tuk12127/work/relationship_knowledge/derivatives \
+            participant \
+            --participant-label ${subj} \
+            --output-spaces MNI152NLin2009cAsym T1w \
+            --fs-license-file ~/work/license.txt \
+            --notrack \
+            --omp-nthreads 8 \
+            --skip_bids_validation >> archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+done
+```
+This is the exact same singularity/fmriprep command we talked about before. But it is wrapped within a for loop so that we can submit each subject from a list as its own fmriprep command. We also use the echo command to write this fmriprep command to the text files we created before. So unlike before, this chunk of code is not actually RUNNING the command, but WRITING it to a text file that torque-launch will run later. 
+
+```{eval=FALSE}
+# Run fmriprep
+torque-launch -p archive/job_scripts/chk_fmriprep_${PBS_JOBID}.txt archive/job_scripts/cmd_fmriprep_${PBS_JOBID}.txt
+```
+This command actually runs torque-launch. It also archives the intermediary steps if there are any. See torque-launch documentation for more information. 
+
+
+Since this script runs multiple subjects, with an fmriprep command for each, we need to submit this script as a job, and specify 6 subjects as the subject list. We can also do this in a for loop so that we can submit our entire list of 40 subjects, to be preprocessed with multiple jobs and 6 subjects preprocessed within each job:
+```{bash, eval=FALSE}
+subjects_list=(301 651 653 693 695 697 699 700 701 706 715 716 719 720 721 722 723 724 726 727 730 738 739 740 743 745 747 749 751 753 754 759 761 762 763 764 765 766 767)
+
+for ((i=0; i < ${#subjects_list[@]}; i+=6)); do
+	part=( "${subjects_list[@]:i:6}" )
+	qsub code/fmriprep_hpc_t1space.sh -v subjects="${part[*]}"
+done
+```
+
+
